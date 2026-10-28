@@ -36,7 +36,7 @@ export const ORS_CONFIG = {
             'Das zentrale System für Mitglieder, Einsätze, Verwaltung und interne Informationen des Österreichischen Roten Sterns.',
 
         url:
-            'https://tommmyshelby.github.io/OesterreichischerRoterStern/'
+            'https://tomm-mmy.github.io/OesterreichischerRoterStern/'
     },
 
 
