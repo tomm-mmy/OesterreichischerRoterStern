@@ -130,6 +130,12 @@ const elements = {
     auditPanelState:
         document.getElementById('audit-panel-state'),
 
+    auditActivityList:
+        document.getElementById('audit-activity-list'),
+
+    auditActivityUpdated:
+        document.getElementById('audit-activity-updated'),
+
     lastCheck:
         document.getElementById('last-check'),
 
@@ -187,6 +193,34 @@ function formatDate(date) {
     } catch {
 
         return '–';
+    }
+}
+
+
+function formatRelativeAuditDate(value) {
+
+    if (!value) return 'Zeitpunkt unbekannt';
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return 'Zeitpunkt unbekannt';
+
+    return new Intl.DateTimeFormat('de-DE', {
+        dateStyle: 'medium',
+        timeStyle: 'short'
+    }).format(date);
+}
+
+
+function safeDetails(value) {
+
+    if (value === null || value === undefined || value === '') return '';
+
+    if (typeof value === 'string') return value;
+
+    try {
+        return JSON.stringify(value);
+    } catch {
+        return String(value);
     }
 }
 
@@ -364,7 +398,7 @@ async function loadDatabase() {
         profiles:
             elements.profilesState,
 
-        members:
+                members:
             elements.membersState,
 
         access_roles:
@@ -506,10 +540,21 @@ async function loadDatabase() {
     }
 
 
-    setText(
-        elements.membersStatus,
-        data.members?.count ?? '–'
-    );
+    // Die Mitglieder-Kachel zeigt aktive Mitglieder, nicht alle Datensätze.
+    try {
+        const { count, error } = await supabase
+            .from('members')
+            .select('*', { count: 'exact', head: true })
+            .eq('active', true);
+
+        setText(
+            elements.membersStatus,
+            error ? '–' : formatNumber(count ?? 0)
+        );
+    } catch (error) {
+        console.warn('[ÖRS System] Aktive Mitglieder konnten nicht gezählt werden:', error);
+        setText(elements.membersStatus, '–');
+    }
 
 
     setText(
@@ -549,6 +594,97 @@ async function loadDatabase() {
         data,
         databaseComplete
     };
+}
+
+
+/* =========================================================
+   LETZTE AUDIT-AKTIVITÄTEN
+   ========================================================= */
+
+async function loadAuditActivity() {
+
+    const list = elements.auditActivityList;
+    if (!list) return;
+
+    list.replaceChildren();
+    const loading = document.createElement('div');
+    loading.className = 'audit-activity-empty';
+    loading.textContent = 'Aktivitäten werden geladen …';
+    list.append(loading);
+
+    try {
+        const { data, error } = await supabase
+            .from('audit_logs')
+            .select('id, discord_id, action, area, details, created_at')
+            .order('created_at', { ascending: false })
+            .limit(8);
+
+        if (error) throw error;
+
+        list.replaceChildren();
+        const rows = Array.isArray(data) ? data : [];
+
+        if (!rows.length) {
+            const empty = document.createElement('div');
+            empty.className = 'audit-activity-empty';
+            empty.textContent = 'Noch keine Aktivitäten protokolliert.';
+            list.append(empty);
+        } else {
+            rows.forEach((row) => {
+                const item = document.createElement('article');
+                item.className = 'audit-activity-item';
+
+                const marker = document.createElement('span');
+                marker.className = 'audit-activity-marker';
+                marker.setAttribute('aria-hidden', 'true');
+
+                const body = document.createElement('div');
+                body.className = 'audit-activity-body';
+
+                const top = document.createElement('div');
+                top.className = 'audit-activity-top';
+
+                const action = document.createElement('strong');
+                action.textContent = row.action || 'Unbekannte Aktion';
+                top.append(action);
+
+                const time = document.createElement('time');
+                time.textContent = formatRelativeAuditDate(row.created_at);
+                if (row.created_at) time.dateTime = row.created_at;
+                top.append(time);
+
+                const meta = document.createElement('p');
+                const parts = [];
+                if (row.area) parts.push(String(row.area));
+                if (row.discord_id) parts.push(`Discord-ID: ${row.discord_id}`);
+                meta.textContent = parts.join(' · ') || 'Kein Benutzer- oder Bereichsbezug gespeichert';
+
+                body.append(top, meta);
+
+                const detailText = safeDetails(row.details);
+                if (detailText) {
+                    const details = document.createElement('p');
+                    details.className = 'audit-activity-details';
+                    details.textContent = detailText.length > 350 ? `${detailText.slice(0, 347)}…` : detailText;
+                    body.append(details);
+                }
+
+                item.append(marker, body);
+                list.append(item);
+            });
+        }
+
+        setText(elements.auditActivityUpdated, `Aktualisiert: ${formatDate(new Date())}`);
+
+    } catch (error) {
+        console.warn('[ÖRS System] Audit-Aktivitäten konnten nicht geladen werden:', error.message || error);
+        list.replaceChildren();
+        const message = document.createElement('div');
+        message.className = 'audit-activity-empty error';
+        message.textContent = 'Aktivitäten konnten nicht geladen werden. Prüfe die SELECT-Richtlinie (RLS) für audit_logs.';
+        list.append(message);
+        setText(elements.auditActivityUpdated, 'Laden fehlgeschlagen');
+    }
 }
 
 
@@ -713,8 +849,6 @@ async function loadRoles() {
         );
     }
 }
-
-
 /* =========================================================
    KONFIGURATION
    ========================================================= */
@@ -903,7 +1037,10 @@ async function loadSystem() {
             await loadDatabase();
 
 
-        await loadRoles();
+        await Promise.all([
+            loadRoles(),
+            loadAuditActivity()
+        ]);
 
 
         const finished =
